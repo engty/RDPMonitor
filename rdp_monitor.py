@@ -337,23 +337,66 @@ class RDPMonitor:
         # 构建推送消息
         event_time = event_data.get("event_time", "")
         verification_result = event_data.get("verification_result", "无需验证")
+        username = event_data.get('username', '未知')
+        event_id = event_data.get('event_id', '未知')
+        event_type = event_data.get('event_type', '未知事件')
         
-        # 按照用户指定的格式构建简单的推送内容
-        simple_message = f"检测到白名单外IP登录！\n\n"
-        simple_message += f"主机：{self.hostname}\n\n"
-        simple_message += f"登陆者IP: {client_ip}\n\n"
-        simple_message += f"用户: {event_data.get('username', '未知')}\n\n"
-        simple_message += f"时间：{event_time}\n\n"
+        # 获取事件状态
+        event_status = "Success" if event_id == 4624 else "Failed"
+        
+        # 提取登录类型
+        logon_type = "未知"
+        if "raw_data" in event_data:
+            logon_match = re.search(r"登录类型:\s+(\d+)", event_data["raw_data"])
+            if logon_match:
+                logon_type_num = logon_match.group(1)
+                if logon_type_num == "3":
+                    logon_type = "网络登录(RDP)"
+                elif logon_type_num == "10":
+                    logon_type = "远程交互式登录"
+                else:
+                    logon_type = f"类型 {logon_type_num}"
+        
+        # 确定IP类型
+        ip_type = "外网IP" if not self.is_private_ip(client_ip) else "内网IP"
+        
+        # 事件状态标记
+        status_mark = "✓ 成功" if event_status == "Success" else "✗ 失败"
+        
+        # 使用简化的Markdown格式内容
+        formatted_message = f"""
+## Windows远程登录 - {event_type}
+
+**时间**：{event_time}
+**用户**：**{username}**
+**来源**：{client_ip} ({ip_type})
+**主机**：{self.hostname}
+
+**登录详情**：
+- 事件ID: {event_id}
+- 登录方式: {logon_type}
+- 状态: **{status_mark}**
+"""
         
         # 添加验证结果信息（始终包含验证状态，无论是否进行了验证）
         if verification_result:
-            simple_message += f"\n\n验证状态: {verification_result}"
-        else:
-            simple_message += f"\n\n验证状态: 无需验证"
+            # 设置验证结果样式
+            if verification_result == "成功":
+                result_text = "✓ 验证通过"
+            elif verification_result == "失败":
+                result_text = "✗ 验证失败"
+            else:
+                result_text = verification_result
+                
+            formatted_message += f"""
+**验证状态**：**{result_text}**
+"""
         
         # 添加自定义消息
         if "message" in event_data:
-            simple_message += f"\n{event_data['message']}"
+            formatted_message += f"""
+> {event_data['message']}
+"""
         
         # 使用sckey而不是硬编码的值
         sckey = self.sckey if self.sckey else config.get("sckey", "")
@@ -365,7 +408,7 @@ class RDPMonitor:
         
         try:
             # 构建参数，避免URL长度问题
-            title = f"Windows远程登录 - {event_data.get('event_type', '未知事件')}"
+            title = f"Windows远程登录 - {event_type}"
             if verification_result:
                 # 在标题中添加验证结果
                 if verification_result == "成功":
@@ -377,7 +420,7 @@ class RDPMonitor:
                 
             params = {
                 'title': title,
-                'desp': simple_message
+                'desp': formatted_message
             }
             
             # 构建完整推送URL
@@ -389,7 +432,7 @@ class RDPMonitor:
                 self.notification_url = push_url
                 logging.info(f"使用配置的推送URL模板: {push_url}")
             
-            # 使用POST请求而不是GET，避免URL长度限制
+            # 使用POST请求，发送Markdown格式内容
             logging.info(f"发送通知到: {self.notification_url}")
             logging.info(f"通知内容: 标题={title}, 验证状态={verification_result}")
             
@@ -412,6 +455,160 @@ class RDPMonitor:
             logging.error(f"详细错误: {traceback.format_exc()}")
             return False
     
+    def send_blacklist_notification(self, ip_address: str, attempt_details: Dict = None) -> bool:
+        """发送黑名单IP尝试登录的安全警报通知"""
+        # 加载配置
+        config = load_config()
+        sckey = self.sckey if self.sckey else config.get("sckey", "")
+        
+        # 如果sckey为空，不发送通知
+        if not sckey:
+            logging.info("SCKEY为空，跳过发送通知")
+            return False
+        
+        # 当前时间
+        current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        # 黑名单冷却时间
+        blacklist_cooldown = config.get("blacklist_cooldown", 24)
+        
+        # 构建简化的Markdown格式警报消息
+        formatted_message = f"""
+## 安全警报 - 黑名单IP尝试登录
+
+**时间**：{current_time}
+**攻击源**：**{ip_address}**
+**警告级别**：**【高风险】**
+
+**防御措施**：
+- IP已被系统自动拦截
+- 已记录到安全日志
+
+> 此IP已被加入黑名单，将在{blacklist_cooldown}小时内禁止所有连接尝试
+"""
+        
+        # 如果有尝试详情，添加到消息中
+        if attempt_details:
+            formatted_message += f"""
+**尝试详情**：
+- 首次尝试：{attempt_details.get('first_attempt', '未知')}
+- 最近尝试：{attempt_details.get('last_attempt', '未知')}
+- 尝试次数：{attempt_details.get('count', '未知')}
+"""
+            
+        try:
+            # 构建参数
+            title = f"安全警报 - 黑名单IP尝试登录 ({ip_address})"
+            params = {
+                'title': title,
+                'desp': formatted_message
+            }
+            
+            # 构建推送URL
+            url_template = config.get("notification_url", "https://sctapi.ftqq.com/{sckey}.send")
+            push_url = url_template.replace("{sckey}", sckey)
+            
+            if not self.notification_url:
+                self.notification_url = push_url
+            
+            # 发送POST请求
+            logging.info(f"发送黑名单警报通知到: {self.notification_url}")
+            response = requests.post(
+                self.notification_url,
+                data=params,
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                logging.info(f"黑名单警报推送成功！响应: {response.text[:100]}")
+                return True
+            else:
+                logging.error(f"黑名单警报推送失败，状态码: {response.status_code}")
+                return False
+        except Exception as e:
+            logging.error(f"发送黑名单警报通知失败: {e}")
+            import traceback
+            logging.error(f"详细错误: {traceback.format_exc()}")
+            return False
+    
+    def send_failed_attempts_notification(self, ip_address: str, failed_attempts: int, max_attempts: int, 
+                                          first_attempt_time: str = None, last_attempt_time: str = None) -> bool:
+        """发送连续多次登录失败的安全警报通知"""
+        # 加载配置
+        config = load_config()
+        sckey = self.sckey if self.sckey else config.get("sckey", "")
+        
+        # 如果sckey为空，不发送通知
+        if not sckey:
+            logging.info("SCKEY为空，跳过发送通知")
+            return False
+        
+        # 当前时间
+        current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        # 计算尝试间隔
+        attempt_interval = "未知"
+        if first_attempt_time and last_attempt_time:
+            try:
+                first_time = datetime.strptime(first_attempt_time, '%Y-%m-%d %H:%M:%S')
+                last_time = datetime.strptime(last_attempt_time, '%Y-%m-%d %H:%M:%S')
+                interval_seconds = (last_time - first_time).total_seconds()
+                attempt_interval = f"{int(interval_seconds)}秒"
+            except:
+                pass
+        
+        # 构建简化的Markdown格式警报消息
+        formatted_message = f"""
+## 安全警报 - 多次验证失败
+
+**时间**：{current_time}
+**可疑IP**：**{ip_address}**
+**失败次数**：{failed_attempts}/{max_attempts}
+**警告级别**：**【中等风险】**
+
+**失败详情**：
+- 首次尝试：{first_attempt_time or '未知'}
+- 最近尝试：{last_attempt_time or '未知'}
+- 尝试间隔：{attempt_interval}
+
+> 如继续失败将自动加入黑名单
+"""
+        
+        try:
+            # 构建参数
+            title = f"安全警报 - 多次登录失败 ({ip_address})"
+            params = {
+                'title': title,
+                'desp': formatted_message
+            }
+            
+            # 构建推送URL
+            url_template = config.get("notification_url", "https://sctapi.ftqq.com/{sckey}.send")
+            push_url = url_template.replace("{sckey}", sckey)
+            
+            if not self.notification_url:
+                self.notification_url = push_url
+            
+            # 发送POST请求
+            logging.info(f"发送失败尝试警报通知到: {self.notification_url}")
+            response = requests.post(
+                self.notification_url,
+                data=params,
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                logging.info(f"失败尝试警报推送成功！响应: {response.text[:100]}")
+                return True
+            else:
+                logging.error(f"失败尝试警报推送失败，状态码: {response.status_code}")
+                return False
+        except Exception as e:
+            logging.error(f"发送失败尝试警报通知失败: {e}")
+            import traceback
+            logging.error(f"详细错误: {traceback.format_exc()}")
+            return False
+            
     def format_event_data(self, event_id: int, username: str, client_ip: str, 
                           event_time: str, raw_data: str) -> Dict[str, Any]:
         """格式化事件数据用于通知"""
@@ -497,29 +694,68 @@ class RDPMonitor:
             if not is_ip_in_whitelist(client_ip, config):
                 allowed, attempt_count = check_allowed_failed_attempts(client_ip, config)
                 
+                # 获取失败尝试详情
+                failed_attempts_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "failed_attempts.json")
+                attempts_data = {}
+                first_attempt_time = None
+                last_attempt_time = None
+                
+                if os.path.exists(failed_attempts_file):
+                    try:
+                        with open(failed_attempts_file, 'r', encoding='utf-8') as f:
+                            attempts_data = json.load(f)
+                        if client_ip in attempts_data:
+                            attempts = attempts_data[client_ip]
+                            if "attempts" in attempts and len(attempts["attempts"]) > 0:
+                                first_attempt_time = attempts["attempts"][0]["time"]
+                                last_attempt_time = attempts["attempts"][-1]["time"]
+                    except Exception as e:
+                        logging.error(f"读取失败尝试文件失败: {e}")
+                
                 # 如果达到最大失败次数限制，添加到黑名单
                 max_failed = config.get("max_failed_attempts", 3)
                 if attempt_count >= max_failed:
                     logging.warning(f"IP {client_ip} 已达到最大失败尝试次数({max_failed})，添加到黑名单")
                     add_ip_to_blacklist(client_ip)
                     
-                    # 更新通知数据
-                    notification_data["message"] = f"IP已添加到黑名单 - 失败尝试次数: {attempt_count}/{max_failed}"
-                    notification_data["verification_result"] = "IP已拉黑"
-                    notification_data["force_notification"] = True
+                    # 创建尝试详情
+                    attempt_details = {
+                        "first_attempt": first_attempt_time,
+                        "last_attempt": last_attempt_time,
+                        "count": attempt_count
+                    }
                     
-                    # 发送通知
-                    self.send_notification(notification_data)
+                    # 使用新的黑名单通知方法
+                    self.send_blacklist_notification(client_ip, attempt_details)
                     
                     # 断开连接
                     disconnect_rdp_sessions()
                     
-                    # 记录事件
+                    # 更新通知数据并记录事件
+                    notification_data["message"] = f"IP已添加到黑名单 - 失败尝试次数: {attempt_count}/{max_failed}"
+                    notification_data["verification_result"] = "IP已拉黑"
                     self.save_event_to_file(notification_data)
                     
                     # 标记事件已处理
                     self.processed_events.add(record_id)
                     return
+                elif attempt_count > 1:
+                    # 多次失败但未达到黑名单阈值，发送警告通知
+                    logging.warning(f"IP {client_ip} 多次登录失败 ({attempt_count}/{max_failed})，发送警告")
+                    
+                    # 使用新的失败尝试通知方法
+                    self.send_failed_attempts_notification(
+                        client_ip, 
+                        attempt_count, 
+                        max_failed,
+                        first_attempt_time,
+                        last_attempt_time
+                    )
+                    
+                    # 标记事件已处理
+                    self.processed_events.add(record_id)
+                    return
+        
         
         # 对于登录成功事件(4624)，需要特殊处理
         if event_id == 4624:
@@ -544,13 +780,13 @@ class RDPMonitor:
                 notification_data["verification_result"] = "黑名单拒绝"
                 notification_data["event_type"] = "黑名单IP登录尝试"
                 notification_data["message"] = "IP在黑名单中，自动断开连接"
-                notification_data["force_notification"] = True
                 
                 # 记录事件到文件
                 self.save_event_to_file(notification_data)
                 
-                # 发送通知
-                self.send_notification(notification_data)
+                # 不再发送黑名单拒绝通知
+                # self.send_blacklist_notification(client_ip)
+                logging.info(f"黑名单拒绝不发送通知: {client_ip}")
                 
                 # 断开连接
                 disconnect_rdp_sessions()
@@ -572,11 +808,13 @@ class RDPMonitor:
                 # 记录事件到文件
                 self.save_event_to_file(notification_data)
                 
-                # 如果启用了强制通知，发送通知
+                # 白名单通过不发送通知，除非明确要求强制通知
                 if notification_data.get("force_notification", False):
                     self.send_notification(notification_data)
                     notification_sent = True
-                    logging.info(f"已发送白名单登录通知 - IP: {client_ip}")
+                    logging.info(f"强制发送白名单登录通知 - IP: {client_ip}")
+                else:
+                    logging.info(f"白名单通过不发送通知: {client_ip}")
                 
                 # 标记事件已处理
                 self.processed_events.add(record_id)
@@ -2740,8 +2978,8 @@ def check_allowed_failed_attempts(ip, config):
                     rdp_port = config.get("rdp_port", 3389)
                     ip_patterns = [
                         fr'(\d{{1,3}}\.\d{{1,3}}\.\d{{1,3}}\.\d{{1,3}}):{rdp_port}',  # IP:port
-                        fr'TCP\s+\S+:{rdp_port}\s+(\d{{1,3}}\.\d{{1,3}}\.\d{{1,3}}\.\d{{1,3}}):\d+',  # TCP *:port IP:port
-                        fr'TCP\s+(\d{{1,3}}\.\d{{1,3}}\.\d{{1,3}}\.\d{{1,3}}):\d+\s+\S+:{rdp_port}'   # TCP IP:port *:port
+                        fr'TCP\\s+\\S+:{rdp_port}\\s+(\\d{{1,3}}\\.\\d{{1,3}}\\.\\d{{1,3}}\\.\\d{{1,3}}):\\d+',  # TCP *:port IP:port
+                        fr'TCP\\s+(\\d{{1,3}}\\.\\d{{1,3}}\\.\\d{{1,3}}\\.\\d{{1,3}}):\\d+\\s+\\S+:{rdp_port}'   # TCP IP:port *:port
                     ]
                     
                     for pattern in ip_patterns:

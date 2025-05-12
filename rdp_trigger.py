@@ -540,16 +540,67 @@ def send_notification_with_verification(connection_info):
         
         client_ip = connection_info.get("client_ip", "unknown")
         verification_result = connection_info.get("verification_result", "外部脚本触发")
+        username = connection_info.get('username', 'unknown')
+        event_time = connection_info.get('event_time', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+        hostname = connection_info.get('hostname', socket.gethostname())
+        
+        # 确定IP类型
+        ip_type = "外网IP"
+        try:
+            if is_private_ip(client_ip):
+                ip_type = "内网IP"
+        except:
+            pass
+            
+        # 检查是否为白名单免验证情况
+        is_whitelist_bypass = "白名单免验证" in verification_result or verification_result == "白名单免验证"
+        force_notification = connection_info.get("force_notification", False)
+        
+        # 白名单IP且是免验证情况下不发送通知，除非强制通知
+        if is_ip_in_whitelist(client_ip, config) and is_whitelist_bypass and not force_notification:
+            logging.info(f"IP {client_ip} 白名单通过不发送通知")
+            return False
         
         # 检查IP是否在白名单中，只有不在白名单中的IP才发送通知
-        if not is_ip_in_whitelist(client_ip, config) or "白名单免验证" not in verification_result:
-            # 构建推送消息
-            message = f"检测到白名单外IP登录！\n"
-            message += f"主机：{connection_info.get('hostname', 'unknown')}\n"
-            message += f"登陆者IP: {client_ip}\n"
-            message += f"用户: {connection_info.get('username', 'unknown')}\n"
-            message += f"时间：{connection_info.get('event_time', 'unknown')}\n"
-            message += f"验证状态: {verification_result}"  # 添加验证状态信息
+        # 或者其他非"白名单免验证"状态（如验证成功/失败等）需要发送通知
+        if not is_ip_in_whitelist(client_ip, config) or (not is_whitelist_bypass) or force_notification:
+            # 美化验证结果
+            if verification_result == "成功":
+                result_text = "✓ 验证通过"
+                status_message = "验证已通过，允许连接"
+            elif verification_result == "失败":
+                result_text = "✗ 验证失败"
+                status_message = "验证失败，已强制断开连接"
+            elif verification_result == "断开":
+                result_text = "用户断开"
+                status_message = "用户主动断开连接"
+            elif verification_result == "超时":
+                result_text = "验证超时"
+                status_message = "验证超时，已强制断开连接"
+            else:
+                result_text = verification_result
+                status_message = "请检查连接状态"
+                
+            # 获取验证时间（如果有）
+            verification_time = connection_info.get("verification_time", "未知")
+            if verification_time != "未知":
+                verification_time = f"{verification_time}秒"
+
+            # 构建简化的Markdown格式消息内容
+            formatted_message = f"""
+## RDP验证结果
+
+**时间**：{event_time}
+**用户**：**{username}**
+**来源**：{client_ip} ({ip_type})
+**主机**：{hostname}
+
+**验证详情**：
+- 验证状态：**{result_text}**
+- 验证时间：{verification_time}
+
+> {status_message}
+"""
             
             # 构建标题，加入验证结果
             title = 'Windows远程登录'
@@ -569,7 +620,7 @@ def send_notification_with_verification(connection_info):
             # 构建推送参数
             params = {
                 'title': title,
-                'desp': message
+                'desp': formatted_message
             }
             
             # 检查notification_url中是否包含{sckey}占位符，并替换
@@ -583,7 +634,7 @@ def send_notification_with_verification(connection_info):
                     notification_url = push_url
                     logging.info(f"使用默认推送URL: {push_url}")
             
-            # 发送HTTP请求
+            # 使用POST请求发送推送
             logging.info(f"发送通知到: {notification_url}")
             response = requests.post(notification_url, data=params, timeout=10)
             
@@ -599,7 +650,7 @@ def send_notification_with_verification(connection_info):
                 logging.error(f"推送失败: {response.status_code}, {response.text[:100]}")
                 return False
         else:
-            logging.info(f"IP {client_ip} 在白名单中，跳过通知")
+            logging.info(f"IP {client_ip} 在白名单中且状态为免验证，跳过通知")
             return False
     except Exception as e:
         logging.error(f"发送通知失败: {e}")

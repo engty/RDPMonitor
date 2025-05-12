@@ -47,8 +47,8 @@ def load_config():
     
     default_config = {
         "notification_url": "",
-        "sckey": "SCT193132TFWL7mLnu8pqgKDBERSDN2RSp",
-        "pin_code": "1187"
+        "sckey": "",
+        "pin_code": "123456"
     }
     
     if os.path.exists(config_file):

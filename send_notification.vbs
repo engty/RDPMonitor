@@ -63,10 +63,10 @@ If fso.FileExists(strConfigFile) Then
     If matches.Count > 0 Then
         strSCKEY = matches(0).SubMatches(0)
     Else
-        strSCKEY = "SCT193132TFWL7mLnu8pqgKDBERSDN2RSp" ' Default SCKEY
+        strSCKEY = "" ' Default SCKEY
     End If
 Else
-    strSCKEY = "SCT193132TFWL7mLnu8pqgKDBERSDN2RSp" ' Default SCKEY
+    strSCKEY = "" ' Default SCKEY
 End If
 
 ' Read message file

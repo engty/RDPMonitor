@@ -53,8 +53,8 @@ def load_config():
     config_file = os.path.join(config_dir, "config.json")
     default_config = {
         "notification_url": "",
-        "sckey": "SCT193132TFWL7mLnu8pqgKDBERSDN2RSp",  # 默认SCKEY
-        "pin_code": "1187",  # 默认PIN码
+        "sckey": "",  # 默认SCKEY
+        "pin_code": "123456",  # 默认PIN码
         "rdp_port": 3389     # 默认RDP端口
     }
     
@@ -69,7 +69,7 @@ def load_config():
 
 def send_test_notification(logger, verification_result=None):
     config = load_config()
-    sckey = config.get("sckey", "SCT193132TFWL7mLnu8pqgKDBERSDN2RSp")
+    sckey = config.get("sckey", "")
     
     # 测试消息
     push_data = {

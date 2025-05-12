@@ -9,5 +9,6 @@
 - `processed_events.json`: 已处理的事件记录
 - `ip_blacklist.txt`: IP黑名单
 - `pin_verification_result.txt`: PIN验证结果
+- `ip_whitelist.txt`: IP白名单
 
 **注意**：实际运行时，这些文件会被动态生成和更新。 

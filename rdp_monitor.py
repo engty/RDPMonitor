@@ -1021,6 +1021,7 @@ def load_config() -> dict:
             "verification_timeout": 60,  # 验证超时时间(秒)，防止重复验证
             "verification_cooldown": 60, # 验证冷却时间(秒)，防止频繁验证
             "ip_blacklistfile": "data/ip_blacklist.txt",  # 黑名单文件路径
+            "ip_whitelistfile": "data/ip_whitelist.txt",  # 白名单文件路径
             "log_retention_days": 90,  # 默认保留90天
             "pin_countdown_seconds": 10,  # PIN验证框倒计时秒数
             "ip_whitelist": "",  # IP白名单
@@ -2401,7 +2402,32 @@ def is_ip_in_whitelist(ip, config):
     if ip == "unknown":
         return False
         
-    # 检查配置文件中的白名单
+    # 读取白名单文件
+    whitelist = load_ip_whitelist()
+    
+    # 精确匹配
+    if ip in whitelist:
+        logging.info(f"IP {ip} 在白名单中")
+        return True
+    
+    # CIDR匹配
+    try:
+        import ipaddress
+        ip_obj = ipaddress.ip_address(ip)
+        
+        for item in whitelist:
+            if '/' in item:  # CIDR格式
+                try:
+                    network = ipaddress.ip_network(item, strict=False)
+                    if ip_obj in network:
+                        logging.info(f"IP {ip} 匹配白名单CIDR规则: {item}")
+                        return True
+                except Exception as e:
+                    logging.error(f"检查CIDR白名单规则 {item} 时出错: {e}")
+    except Exception as e:
+        logging.error(f"检查IP {ip} 是否在白名单中时发生错误: {e}")
+    
+    # 检查配置文件中的白名单（保留向后兼容性）
     whitelist_str = config.get("ip_whitelist", "")
     
     # 如果是字符串格式，转换为列表
@@ -2445,6 +2471,43 @@ def update_ip_whitelist(ip, add=True, config=None):
     if not config:
         config = load_config()
     
+    # 添加或移除IP到白名单文件
+    if add:
+        add_result = add_ip_to_whitelist(ip)
+    else:
+        # 从配置文件获取白名单文件路径
+        whitelist_path = config.get("ip_whitelistfile", "data/ip_whitelist.txt")
+        
+        # 使用绝对路径
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        
+        # 如果路径是相对路径，转换为绝对路径
+        if not os.path.isabs(whitelist_path):
+            whitelist_path = os.path.join(current_dir, whitelist_path)
+        
+        # 加载现有白名单
+        whitelist = load_ip_whitelist()
+        
+        # 从白名单中移除IP
+        if ip in whitelist:
+            whitelist.remove(ip)
+            logging.info(f"IP {ip} 已从白名单文件中移除")
+            
+            # 写回白名单文件
+            try:
+                with open(whitelist_path, 'w', encoding='utf-8') as f:
+                    f.write("# IP白名单文件，每行一个IP地址或CIDR网段\n")
+                    for whitelist_ip in whitelist:
+                        f.write(f"{whitelist_ip}\n")
+                add_result = True
+            except Exception as e:
+                logging.error(f"更新白名单文件失败: {e}")
+                add_result = False
+        else:
+            logging.info(f"IP {ip} 不在白名单文件中，无需移除")
+            add_result = True
+    
+    # 向后兼容：同时更新config.json中的白名单配置
     # 从配置中获取当前白名单
     whitelist_str = config.get("ip_whitelist", "")
     
@@ -2459,12 +2522,12 @@ def update_ip_whitelist(ip, add=True, config=None):
         # 添加IP到白名单
         if ip not in whitelist:
             whitelist.append(ip)
-            logging.info(f"IP {ip} 已添加到白名单")
+            logging.info(f"IP {ip} 已添加到配置文件白名单")
     else:
         # 从白名单移除IP
         if ip in whitelist:
             whitelist.remove(ip)
-            logging.info(f"IP {ip} 已从白名单中移除")
+            logging.info(f"IP {ip} 已从配置文件白名单中移除")
     
     # 将列表转换回字符串格式
     new_whitelist_str = ",".join(whitelist)
@@ -2481,9 +2544,9 @@ def update_ip_whitelist(ip, add=True, config=None):
     try:
         with open(config_file, 'w', encoding='utf-8') as f:
             json.dump(config, f, indent=2, ensure_ascii=False)
-        return True
+        return add_result and True
     except Exception as e:
-        logging.error(f"更新IP白名单失败: {e}")
+        logging.error(f"更新IP白名单配置文件失败: {e}")
         return False
 
 def check_allowed_failed_attempts(ip, config):
@@ -3534,6 +3597,56 @@ def load_ip_blacklist():
     
     return blacklist
 
+def load_ip_whitelist():
+    """加载IP白名单列表
+    
+    Returns:
+        list: 包含所有白名单IP/CIDR的列表
+    """
+    # 使用绝对路径
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    # 从配置文件获取白名单文件路径
+    config = load_config()
+    whitelist_path = config.get("ip_whitelistfile", "data/ip_whitelist.txt")
+    
+    # 如果路径是相对路径，转换为绝对路径
+    if not os.path.isabs(whitelist_path):
+        whitelist_path = os.path.join(current_dir, whitelist_path)
+    
+    # 确保目录存在
+    whitelist_dir = os.path.dirname(whitelist_path)
+    if not os.path.exists(whitelist_dir):
+        os.makedirs(whitelist_dir)
+        logging.info(f"已创建白名单目录: {whitelist_dir}")
+    
+    whitelist = []
+    
+    # 如果白名单文件存在，读取内容
+    if os.path.exists(whitelist_path):
+        try:
+            with open(whitelist_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#'):
+                        whitelist.append(line)
+            logging.debug(f"已加载白名单文件 {whitelist_path}，包含 {len(whitelist)} 个条目")
+        except Exception as e:
+            logging.error(f"读取白名单文件失败: {e}")
+    else:
+        # 创建空白名单文件
+        try:
+            with open(whitelist_path, 'w', encoding='utf-8') as f:
+                f.write("# IP白名单文件，每行一个IP地址或CIDR网段\n")
+                f.write("# 示例:\n")
+                f.write("# 192.168.1.100\n")
+                f.write("# 10.0.0.0/8\n")
+            logging.info(f"已创建默认白名单文件: {whitelist_path}")
+        except Exception as e:
+            logging.error(f"创建默认白名单文件失败: {e}")
+    
+    return whitelist
+
 def add_ip_to_blacklist(ip):
     """将IP添加到黑名单
     
@@ -3623,6 +3736,97 @@ def add_ip_to_blacklist(ip):
         return True
     except Exception as e:
         logging.error(f"添加IP到黑名单失败: {e}")
+        return False
+
+def add_ip_to_whitelist(ip):
+    """将IP添加到白名单
+    
+    Args:
+        ip: 要添加的IP地址
+        
+    Returns:
+        bool: 添加成功返回True，否则返回False
+    """
+    # 使用绝对路径
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    logs_dir = os.path.join(current_dir, 'logs')
+    
+    # 如果IP为空或为"unknown"，尝试获取有效IP
+    if not ip or ip == "unknown":
+        # 尝试从日志文件中获取IP
+        trigger_log = os.path.join(logs_dir, 'rdp_trigger.log')
+        if os.path.exists(trigger_log):
+            try:
+                with open(trigger_log, 'r', encoding='utf-8', errors='ignore') as f:
+                    log_content = f.read()
+                    # 搜索最近的IP记录
+                    ip_match = re.search(r'检测到RDP连接: IP=(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})', log_content)
+                    if ip_match:
+                        ip = ip_match.group(1)
+                        logging.info(f"从rdp_trigger.log获取到白名单IP: {ip}")
+            except Exception as e:
+                logging.error(f"从rdp_trigger.log读取IP失败: {e}")
+        
+        # 如果仍然没有有效IP，尝试从message.log获取
+        if not ip or ip == "unknown":
+            message_file = os.path.join(logs_dir, 'message.log')
+            if os.path.exists(message_file):
+                try:
+                    with open(message_file, 'r', encoding='utf-8', errors='ignore') as f:
+                        content = f.read()
+                    
+                    # 使用正则表达式查找IP地址
+                    # 从配置文件获取RDP端口
+                    config = load_config()
+                    rdp_port = config.get("rdp_port", 3389)
+                    
+                    ip_patterns = [
+                        fr'(\d{{1,3}}\.\d{{1,3}}\.\d{{1,3}}\.\d{{1,3}}):{rdp_port}',  # IP:port
+                        fr'TCP\\s+\\S+:{rdp_port}\\s+(\\d{{1,3}}\\.\\d{{1,3}}\\.\\d{{1,3}}\\.\\d{{1,3}}):\\d+',  # TCP *:port IP:port
+                        fr'TCP\\s+(\\d{{1,3}}\\.\\d{{1,3}}\\.\\d{{1,3}}\\.\\d{{1,3}}):\\d+\\s+\\S+:{rdp_port}'   # TCP IP:port *:port
+                    ]
+                    
+                    for pattern in ip_patterns:
+                        matches = re.findall(pattern, content)
+                        if matches:
+                            if isinstance(matches[0], tuple):
+                                ip = matches[0][0]  # 获取正则表达式的第一个捕获组
+                            else:
+                                ip = matches[0]
+                            logging.info(f"从message.log获取到白名单IP: {ip}")
+                            break
+                except Exception as e:
+                    logging.error(f"从message.log读取IP失败: {e}")
+    
+    # 如果仍然没有有效IP，无法添加到白名单
+    if not ip or ip == "unknown":
+        logging.error("无法获取有效的IP地址，无法添加到白名单")
+        return False
+    
+    # 从配置文件获取白名单文件路径
+    config = load_config()
+    whitelist_path = config.get("ip_whitelistfile", "data/ip_whitelist.txt")
+    
+    # 如果路径是相对路径，转换为绝对路径
+    if not os.path.isabs(whitelist_path):
+        whitelist_path = os.path.join(current_dir, whitelist_path)
+    
+    # 加载现有白名单
+    whitelist = load_ip_whitelist()
+    
+    # 检查IP是否已在白名单中
+    if ip in whitelist:
+        logging.info(f"IP {ip} 已在白名单中")
+        return True
+    
+    # 添加IP到白名单
+    try:
+        with open(whitelist_path, 'a', encoding='utf-8') as f:
+            f.write(f"{ip}\n")
+        logging.info(f"IP {ip} 已添加到白名单")
+        return True
+    except Exception as e:
+        logging.error(f"添加IP到白名单失败: {e}")
         return False
 
 if __name__ == "__main__":

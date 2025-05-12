@@ -39,7 +39,7 @@
 - 日志保留天数可配置
 - 多种命令行参数支持（调试模式、测试通知、IP类型检测等）
 - 支持通过Windows任务计划程序实时触发RDP登录检测和通知
-- IP黑名单功能，自动阻止多次登录失败的IP
+- IP黑、白名单功能，自动放行白名单或阻止多次登录失败的IP
 
 ## 快速开始
 
@@ -117,6 +117,7 @@ rdp_monitor/
   │   ├── processed_events.json # 已处理事件ID记录，避免重复处理
   │   ├── pin_verification_result.txt # PIN验证结果文件
   │   ├── ip_blacklist.txt    # IP黑名单文件，存储被禁止的IP地址
+  │   ├── ip_whitelist.txt    # IP白名单文件，存储允许访问的IP地址
   │   ├── README.md           # 数据目录说明文档
   │   └── .gitkeep            # Git空目录占位文件
   └── config/                 # 配置目录
@@ -140,7 +141,8 @@ rdp_monitor/
   "blacklist_cooldown": 24,
   "verification_timeout": 60,
   "verification_cooldown": 60,
-  "ip_blacklistfile": "data/ip_blacklist.txt"
+  "ip_blacklistfile": "data/ip_blacklist.txt",
+  "ip_whitelistfile": "data/ip_whitelist.txt"
 }
 ```
 
@@ -149,12 +151,12 @@ rdp_monitor/
 - `pin_code`: RDP登录验证PIN码，远程连接时需要验证
 - `rdp_port`: RDP远程桌面端口，默认3389，如修改过系统RDP端口请在此处同步设置
 - `log_retention_days`: 日志保留天数，0表示仅保留当天日志
-- `ip_whitelist`: 白名单IP，支持多个IP（以逗号分隔）
 - `max_failed_attempts`: 登录失败的最大尝试次数，超过后将加入黑名单
 - `blacklist_cooldown`: 黑名单冷却时间（小时）
 - `verification_timeout`: 验证超时时间（秒）
 - `verification_cooldown`: 验证冷却时间（秒），防止重复验证
 - `ip_blacklistfile`: 黑名单文件路径
+- `ip_whitelistfile`: 白名单文件路径，IP白名单文件存储路径，每行一个IP或CIDR
 
 ### 自定义RDP端口
 如果您修改了Windows默认的远程桌面端口（3389），请务必在配置中设置相同的端口号：

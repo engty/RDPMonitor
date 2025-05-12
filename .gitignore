@@ -7,6 +7,7 @@
 !data/.gitkeep
 !data/README.md
 !data/ip_blacklist.txt
+!data/ip_whitelist.txt
 # 日志文件
 /logs/*
 !logs/.gitkeep

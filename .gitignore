@@ -1,0 +1,24 @@
+# 排除配置文件（包含敏感信息）
+/config/*
+!config/config.json.example
+
+# 数据文件
+/data/*
+!data/.gitkeep
+!data/README.md
+!data/ip_blacklist.txt
+# 日志文件
+/logs/*
+!logs/.gitkeep
+!logs/README.md
+# Python缓存文件
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDE文件
+.cursor/
+
+# 操作系统文件
+.DS_Store
+Thumbs.db 

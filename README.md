@@ -141,6 +141,7 @@ rdp_monitor/
   "blacklist_cooldown": 24,
   "verification_timeout": 60,
   "verification_cooldown": 60,
+  "failed_verification_cooldown": 0,
   "ip_blacklistfile": "data/ip_blacklist.txt",
   "ip_whitelistfile": "data/ip_whitelist.txt"
 }
@@ -155,8 +156,20 @@ rdp_monitor/
 - `blacklist_cooldown`: 黑名单冷却时间（小时）
 - `verification_timeout`: 验证超时时间（秒）
 - `verification_cooldown`: 验证冷却时间（秒），防止重复验证
+- `failed_verification_cooldown`: 验证失败后的冷却时间（秒），默认为0
 - `ip_blacklistfile`: 黑名单文件路径
 - `ip_whitelistfile`: 白名单文件路径，IP白名单文件存储路径，每行一个IP或CIDR
+
+### 通知推送条件
+系统通知推送遵循以下条件：
+
+1. **白名单用户**：白名单内的IP登录不会触发通知推送，除非配置强制通知
+2. **外网IP登录**：来自外网IP的登录会触发通知推送
+3. **验证失败**：PIN码验证失败会触发通知
+4. **连续失败尝试**：连续多次登录尝试失败会触发通知并将IP加入黑名单
+5. **非正常行为**：检测到异常登录行为（如短时间内多次连接）会触发通知
+
+通知推送主要通过RDPMonitor.send_notification()和send_notification_with_verification()函数实现，通过is_ip_in_whitelist()函数和force_notification标志控制。系统确保除白名单用户外的所有可疑情况都会推送通知提醒管理员。
 
 ### 自定义RDP端口
 如果您修改了Windows默认的远程桌面端口（3389），请务必在配置中设置相同的端口号：
@@ -249,6 +262,20 @@ rdp_monitor/
 - 请确保`force_disconnect.bat`文件位于程序目录中
 - 检查是否有足够的权限执行断开操作
 - 查看日志文件中是否有关于断开连接的错误信息
+
+### 8. Windows RDP会话缓存问题
+即使对代码进行了全面修复，在某些情况下仍可能出现验证绕过问题，这主要是由Windows RDP连接缓存机制导致的：
+
+- **Terminal Services会话管理**：Windows会保留断开连接的会话状态，允许快速重连
+- **RDP协议会话恢复机制**：允许在短时间内快速重建连接
+- **TCP连接状态缓存**：Windows网络栈可能保留一定时间的连接信息
+- **Windows身份验证凭据缓存**：系统会缓存最近使用的身份验证信息
+
+为减轻这类问题，建议：
+1. 缩短RDP会话超时时间（系统组策略中设置）
+2. 调整服务器配置，禁用断开连接会话的保持
+3. 配置更严格的安全策略，强制重新身份验证
+4. 确保监控程序在每次连接时清空事件记录缓存
 
 ## 附录
 

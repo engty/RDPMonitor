@@ -30,8 +30,7 @@
 
 ## 主要功能
 
-- 实时监控RDP远程登录事件（成功登录、失败尝试、注销等）
-- 智能区分内外网IP地址，只对外网登录IP发送通知
+- 实时监控RDP远程登录事件（成功登录、失败尝试、注销等）- 
 - 支持登录PIN码验证，防止未授权访问
 - 美观的PIN码验证界面，带倒计时进度条和现代化UI设计
 - 支持自定义RDP端口，适配非标准远程桌面配置
@@ -41,7 +40,7 @@
 - 日志保留天数可配置
 - 多种命令行参数支持（调试模式、测试通知、IP类型检测等）
 - 支持通过Windows任务计划程序实时触发RDP登录检测和通知
-- IP黑、白名单功能，自动放行白名单或阻止多次登录失败的IP
+- IP黑、白名单功能，自动放行白名单或阻止多次登录失败的IP并加入黑名单
 
 ## 快速开始
 
@@ -137,8 +136,7 @@ rdp_monitor/
   "sckey": "YOUR_SCKEY",
   "pin_code": "123456",
   "rdp_port": 3389,
-  "log_retention_days": 90,
-  "ip_whitelist": "192.168.1.1",
+  "log_retention_days": 7,
   "max_failed_attempts": 3,
   "blacklist_cooldown": 24,
   "verification_timeout": 60,

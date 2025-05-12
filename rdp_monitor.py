@@ -3565,6 +3565,11 @@ def is_ip_in_blacklist(ip, config):
     """
     if not ip:
         return False
+
+    # 首先检查IP是否在白名单中，如果在白名单中则不判定为黑名单
+    if is_ip_in_whitelist(ip, config):
+        logging.info(f"IP {ip} 在白名单中，白名单优先于黑名单")
+        return False
         
     # 读取黑名单
     blacklist = load_ip_blacklist()

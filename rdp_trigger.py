@@ -241,6 +241,59 @@ def is_private_ip(ip):
         logging.error(f"IP地址格式无效: {e}")
         return True
 
+def is_ip_in_blacklist(ip, config):
+    """检查IP是否在黑名单中"""
+    if not ip:
+        return False
+    
+    # 首先检查IP是否在白名单中，如果在白名单中则不判定为黑名单
+    if is_ip_in_whitelist(ip, config):
+        logging.info(f"IP {ip} 在白名单中，白名单优先于黑名单")
+        return False
+    
+    # 读取黑名单文件
+    blacklist_path = config.get("ip_blacklistfile", "data/ip_blacklist.txt")
+    # 如果路径是相对路径，转换为绝对路径
+    if not os.path.isabs(blacklist_path):
+        blacklist_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), blacklist_path)
+    
+    blacklist = []
+    # 如果黑名单文件存在，读取内容
+    if os.path.exists(blacklist_path):
+        try:
+            with open(blacklist_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#'):
+                        blacklist.append(line)
+            logging.debug(f"已加载黑名单文件 {blacklist_path}，包含 {len(blacklist)} 个条目")
+        except Exception as e:
+            logging.error(f"读取黑名单文件失败: {e}")
+    
+    # 精确匹配
+    if ip in blacklist:
+        logging.info(f"IP {ip} 在黑名单中")
+        return True
+    
+    # CIDR匹配
+    try:
+        import ipaddress
+        ip_obj = ipaddress.ip_address(ip)
+        
+        for item in blacklist:
+            if '/' in item:  # CIDR格式
+                try:
+                    network = ipaddress.ip_network(item, strict=False)
+                    if ip_obj in network:
+                        logging.info(f"IP {ip} 匹配黑名单CIDR规则: {item}")
+                        return True
+                except Exception as e:
+                    logging.error(f"检查CIDR黑名单规则 {item} 时出错: {e}")
+    except Exception as e:
+        logging.error(f"检查IP {ip} 是否在黑名单中时发生错误: {e}")
+    
+    return False
+
 def show_pin_dialog():
     """显示PIN码验证对话框并等待验证结果"""
     try:
@@ -255,10 +308,24 @@ def show_pin_dialog():
         connection_info = get_connection_info()
         client_ip = connection_info.get("client_ip", "unknown")
         
-        # 检查IP是否在白名单中，如果在白名单中则跳过验证
+        # 首先检查IP是否在白名单中，如果在白名单中则跳过验证
         if is_ip_in_whitelist(client_ip, config):
             logging.info(f"IP {client_ip} 在白名单中，跳过PIN验证")
             return "白名单免验证"
+        
+        # 然后检查IP是否在黑名单中，如果在黑名单中则拒绝连接
+        if is_ip_in_blacklist(client_ip, config):
+            logging.warning(f"IP {client_ip} 在黑名单中，拒绝连接")
+            
+            # 断开连接
+            try:
+                disconnect_cmd = f'"{script_dir}\\force_disconnect.bat"'
+                subprocess.Popen(disconnect_cmd, shell=True)
+                logging.info(f"已执行断开连接命令：{disconnect_cmd}")
+            except Exception as e:
+                logging.error(f"断开连接失败: {e}")
+            
+            return "黑名单拒绝"
         
         # 保存验证结果到文件
         pin_result_file = os.path.join(log_dir, 'pin_verification_result.txt')
@@ -352,6 +419,47 @@ def is_ip_in_whitelist(ip, config):
     """检查IP是否在白名单中"""
     if ip == "unknown":
         return False
+    
+    # 首先读取白名单文件
+    whitelist_path = config.get("ip_whitelistfile", "data/ip_whitelist.txt")
+    # 如果路径是相对路径，转换为绝对路径
+    if not os.path.isabs(whitelist_path):
+        whitelist_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), whitelist_path)
+    
+    whitelist_from_file = []
+    # 如果白名单文件存在，读取内容
+    if os.path.exists(whitelist_path):
+        try:
+            with open(whitelist_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#'):
+                        whitelist_from_file.append(line)
+            logging.debug(f"已加载白名单文件 {whitelist_path}，包含 {len(whitelist_from_file)} 个条目")
+        except Exception as e:
+            logging.error(f"读取白名单文件失败: {e}")
+    
+    # 精确匹配白名单文件
+    if ip in whitelist_from_file:
+        logging.info(f"IP {ip} 在白名单文件中")
+        return True
+    
+    # CIDR匹配白名单文件
+    try:
+        import ipaddress
+        ip_obj = ipaddress.ip_address(ip)
+        
+        for item in whitelist_from_file:
+            if '/' in item:  # CIDR格式
+                try:
+                    network = ipaddress.ip_network(item, strict=False)
+                    if ip_obj in network:
+                        logging.info(f"IP {ip} 匹配白名单文件CIDR规则: {item}")
+                        return True
+                except Exception as e:
+                    logging.error(f"检查白名单文件CIDR规则 {item} 时出错: {e}")
+    except Exception as e:
+        logging.error(f"检查IP {ip} 是否在白名单文件中时发生错误: {e}")
     
     # 从配置中获取白名单列表
     whitelist_str = config.get("ip_whitelist", "")

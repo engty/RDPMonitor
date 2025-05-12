@@ -298,7 +298,7 @@ def show_pin_dialog():
     """显示PIN码验证对话框并等待验证结果"""
     try:
         config = load_config()
-        pin_code = config.get("pin_code", "1187")
+        pin_code = config.get("pin_code", "123456")
         
         if not pin_code:
             logging.info("未配置PIN码，跳过验证")

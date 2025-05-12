@@ -1022,7 +1022,7 @@ def load_config() -> dict:
             "verification_cooldown": 60, # 验证冷却时间(秒)，防止频繁验证
             "ip_blacklistfile": "data/ip_blacklist.txt",  # 黑名单文件路径
             "ip_whitelistfile": "data/ip_whitelist.txt",  # 白名单文件路径
-            "log_retention_days": 90,  # 默认保留90天
+            "log_retention_days": 7,  # 默认保留7天
             "pin_countdown_seconds": 10,  # PIN验证框倒计时秒数
             "ip_whitelist": "",  # IP白名单
             "auto_blacklist": True  # 自动黑名单
@@ -1979,18 +1979,21 @@ class PinDialog:
                     except Exception as e:
                         logging.error(f"读取验证历史记录失败: {e}")
                 
+                # 记录验证失败原因（区分倒计时超时和用户主动断开）
+                disconnect_reason = 'timeout' if self.remaining_time <= 0 else 'user_disconnect'
+                
                 # 添加验证失败记录
                 verification_history[client_ip] = {
                     'result': 'failed',
                     'time': datetime.now().isoformat(),
-                    'reason': 'user_disconnect' # 用户主动断开
+                    'reason': disconnect_reason
                 }
                 
                 # 保存验证历史记录
                 try:
                     with open(verification_history_file, 'w', encoding='utf-8') as f:
                         json.dump(verification_history, f, indent=2)
-                    logging.info(f"IP {client_ip} 验证失败记录已保存")
+                    logging.info(f"IP {client_ip} 验证失败记录已保存，原因: {disconnect_reason}")
                 except Exception as e:
                     logging.error(f"保存验证历史记录失败: {e}")
                     
@@ -2008,6 +2011,49 @@ class PinDialog:
                         # 记录黑名单添加日志
                         with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "blacklist.log"), 'a', encoding='utf-8') as f:
                             f.write(f"{datetime.now().isoformat()} - IP {client_ip} 已添加到黑名单，失败尝试次数: {attempt_count}/{max_failed}\n")
+                            
+                    # 发送倒计时超时验证失败通知
+                    try:
+                        if disconnect_reason == 'timeout':
+                            # 获取配置信息用于发送通知
+                            notification_url = config.get("notification_url", "")
+                            
+                            # 使用Server酱SCKEY替换URL中的占位符，如果有
+                            sckey = config.get("sckey", "")
+                            if "{sckey}" in notification_url and sckey:
+                                notification_url = notification_url.replace("{sckey}", sckey)
+                            
+                            # 构建通知数据
+                            notification_data = {
+                                "event_type": "登录验证超时",
+                                "event_id": 0,
+                                "username": "未知用户",
+                                "client_ip": client_ip,
+                                "hostname": socket.gethostname(),
+                                "local_ip": socket.gethostbyname(socket.gethostname()),
+                                "event_time": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                                "verification_result": "验证超时",
+                                "message": "PIN码验证超时，已自动断开连接",
+                                "force_notification": True  # 强制发送通知，无论IP是否在白名单
+                            }
+                            
+                            # 创建RDPMonitor实例来发送通知
+                            rdp_monitor = RDPMonitor(notification_url, sckey, "")
+                            
+                            # 发送通知
+                            rdp_monitor.send_notification(notification_data)
+                            logging.info(f"IP {client_ip} 验证超时通知已发送")
+                            
+                            # 保存事件到事件记录文件
+                            try:
+                                rdp_monitor.save_event_to_file(notification_data)
+                                logging.info(f"IP {client_ip} 验证超时事件已保存到记录文件")
+                            except Exception as save_error:
+                                logging.error(f"保存验证超时事件到文件失败: {save_error}")
+                    except Exception as e:
+                        logging.error(f"发送验证超时通知失败: {e}")
+                        import traceback
+                        logging.error(f"通知错误详情: {traceback.format_exc()}")
                 except Exception as e:
                     logging.error(f"记录PIN验证失败到failed_attempts.json失败: {e}")
         except Exception as e:

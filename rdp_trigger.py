@@ -330,7 +330,7 @@ def show_pin_dialog():
         # 保存验证结果到文件
         pin_result_file = os.path.join(log_dir, 'pin_verification_result.txt')
         
-        # 检查是否已经完成验证 - 避免重复验证
+        # 先删除可能存在的旧结果文件，确保获取最新结果
         if os.path.exists(pin_result_file):
             try:
                 # 检查文件修改时间，如果是最近30秒内的验证，直接使用结果
@@ -367,6 +367,12 @@ def show_pin_dialog():
                     with open(pin_result_file, 'r') as f:
                         result = f.read().strip()
                     logging.info(f"PIN验证结果: {result}")
+                    
+                    # 确保在读取结果后，进程有足够时间退出
+                    if result in ["失败", "断开"]:
+                        logging.info(f"检测到验证失败或断开，等待1秒确保处理完成")
+                        time.sleep(1)
+                    
                     return result
                 except Exception as e:
                     logging.error(f"读取PIN验证结果失败: {e}")
@@ -374,6 +380,19 @@ def show_pin_dialog():
             
             time.sleep(wait_interval)
             total_waited += wait_interval
+            
+            # 检查进程是否仍在运行
+            if process.poll() is not None:
+                logging.info(f"PIN验证进程已退出，返回值: {process.returncode}")
+                # 如果进程已退出但没有结果文件，再等待一秒
+                if not os.path.exists(pin_result_file):
+                    logging.warning("进程已退出但未找到结果文件，等待1秒")
+                    time.sleep(1)
+                    if os.path.exists(pin_result_file):
+                        with open(pin_result_file, 'r') as f:
+                            result = f.read().strip()
+                        logging.info(f"延迟读取到PIN验证结果: {result}")
+                        return result
         
         logging.warning(f"等待PIN验证结果超时")
         return "超时"
@@ -388,6 +407,13 @@ def main():
     try:
         logging.info("RDP登录触发器启动")
         
+        # 处理命令行参数
+        verify_pin_only = False
+        for arg in sys.argv:
+            if arg == "--verify-pin":
+                verify_pin_only = True
+                logging.info("检测到--verify-pin参数，将只进行PIN验证")
+        
         # 记录触发时间和基本信息
         connection_info = get_connection_info()
         logging.info(f"检测到RDP连接: IP={connection_info.get('client_ip', 'unknown')}, 用户={connection_info.get('username', 'unknown')}")
@@ -397,6 +423,7 @@ def main():
         
         # 显示PIN码验证对话框并获取验证结果
         verification_result = show_pin_dialog()
+        logging.info(f"PIN验证结果: {verification_result}")
         
         # 在连接信息中添加验证结果
         if verification_result:
@@ -405,6 +432,7 @@ def main():
             # 如果没有PIN验证逻辑或验证被跳过
             connection_info["verification_result"] = "外部脚本触发"
         
+        # 关键修复：确保对任何验证结果都发送通知，包括失败和断开
         # 发送通知
         send_notification_with_verification(connection_info)
         
@@ -524,6 +552,8 @@ def send_notification_with_verification(connection_info):
                 title += " (验证通过)"
             elif verification_result == "失败":
                 title += " (验证失败)"
+            elif verification_result == "断开":
+                title += " (用户断开)"
             elif verification_result == "超时":
                 title += " (验证超时)"
             elif verification_result == "错误":
@@ -537,13 +567,16 @@ def send_notification_with_verification(connection_info):
                 'desp': message
             }
             
-            # 推送URL
-            push_url = f'https://sctapi.ftqq.com/{sckey}.send'
-            
-            # 如果没有配置通知URL，使用默认URL
-            if not notification_url:
-                notification_url = push_url
-                logging.info(f"使用默认推送URL: {push_url}")
+            # 检查notification_url中是否包含{sckey}占位符，并替换
+            if notification_url and "{sckey}" in notification_url:
+                notification_url = notification_url.replace("{sckey}", sckey)
+                logging.info(f"替换notification_url中的{sckey}占位符")
+            else:
+                # 如果没有notification_url或没有占位符，使用默认URL
+                push_url = f'https://sctapi.ftqq.com/{sckey}.send'
+                if not notification_url:
+                    notification_url = push_url
+                    logging.info(f"使用默认推送URL: {push_url}")
             
             # 发送HTTP请求
             logging.info(f"发送通知到: {notification_url}")

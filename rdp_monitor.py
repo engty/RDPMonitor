@@ -1458,7 +1458,10 @@ def disconnect_rdp_sessions():
 
 class PinDialog:
     def __init__(self, correct_pin: str):
-        self.correct_pin = correct_pin
+        """初始化PIN码验证对话框"""
+        # 如果传入了correct_pin，则使用它，否则从配置文件读取
+        config = load_config()
+        self.correct_pin = correct_pin if correct_pin else config.get("pin_code", "123456")
         self.result = False
         # 从配置文件读取PIN验证倒计时秒数，如果没有则使用默认值10秒
         config = load_config()
@@ -1846,6 +1849,26 @@ class PinDialog:
             self.pin_entry.delete(0, tk.END)
             self.pin_entry.config(bg="#FFCCCC")
             
+            # 立即写入验证失败结果
+            try:
+                logs_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
+                result_file = os.path.join(logs_dir, 'pin_verification_result.txt')
+                with open(result_file, 'w') as f:
+                    f.write("失败")  # PIN码验证失败
+                    # 确保文件写入完成
+                    os.fsync(f.fileno())
+                logging.info("已写入PIN验证结果：验证失败")
+                
+                # 在退出前先确保结果已写入
+                if os.path.exists(result_file):
+                    with open(result_file, 'r') as f:
+                        content = f.read().strip()
+                    logging.info(f"确认PIN验证失败结果文件已写入: {content}")
+            except Exception as e:
+                logging.error(f"写入验证结果失败: {e}")
+                import traceback
+                logging.error(f"详细错误: {traceback.format_exc()}")
+            
             # PIN码错误直接断开连接
             self.countdown_label.config(text="PIN码错误，即将断开连接...", fg="#FF0000", font=("Microsoft YaHei UI", 10, "bold"))
             # 1秒后断开连接
@@ -1855,6 +1878,32 @@ class PinDialog:
         """断开连接"""
         self.result = False
         self.countdown_running = False
+        
+        # 立即将验证结果写入文件，确保rdp_trigger.py能读取到
+        try:
+            logs_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
+            result_file = os.path.join(logs_dir, 'pin_verification_result.txt')
+            # 区分用户点击断开和PIN验证失败的情况
+            with open(result_file, 'w') as f:
+                f.write("断开")  # 用户主动断开的结果
+            logging.info("已写入PIN验证结果：用户主动断开")
+            
+            # 确保文件写入完成
+            os.fsync(f.fileno())
+        except Exception as e:
+            logging.error(f"写入验证结果失败: {e}")
+            import traceback
+            logging.error(f"详细错误: {traceback.format_exc()}")
+        
+        # 不要在此处关闭窗口，先完成文件写入和日志记录
+        try:
+            # 在退出前先确保结果已写入并可以被读取
+            if os.path.exists(result_file):
+                with open(result_file, 'r') as f:
+                    content = f.read().strip()
+                logging.info(f"确认结果文件已写入: {content}")
+        except Exception as e:
+            logging.error(f"确认结果文件失败: {e}")
         
         # 确保将此IP的验证失败记录到验证历史中
         try:
@@ -3156,17 +3205,23 @@ def main():
             
             # 显示PIN验证对话框
             if pin_code:
+                # 重要：此处使用新的逻辑，无论验证结果如何，确保返回到rdp_trigger.py进行通知
+                # 创建PIN验证对话框但不立即显示
                 pin_dialog = PinDialog(pin_code)
-                if pin_dialog.show_dialog():
-                    # PIN验证成功
-                    logging.info("PIN码验证成功")
+                result = pin_dialog.show_dialog()
+                
+                # 此处检查result_file是否已经存在
+                # 这是因为在验证失败或断开时，可能已经由dialog中的方法写入了结果文件
+                if not os.path.exists(result_file):
+                    logging.info(f"验证对话框已关闭，但未找到结果文件，使用对话框返回结果: {result}")
                     with open(result_file, 'w') as f:
-                        f.write("成功")
+                        if result:
+                            f.write("成功")
+                        else:
+                            # 如果没有找到结果文件，且对话框返回False，判定为验证失败
+                            f.write("失败")
                 else:
-                    # PIN验证失败
-                    logging.info("PIN码验证失败")
-                    with open(result_file, 'w') as f:
-                        f.write("失败")
+                    logging.info("已找到验证结果文件，使用文件中的结果")
             else:
                 # 没有配置PIN码
                 logging.info("未配置PIN码，跳过验证")
@@ -3178,6 +3233,17 @@ def main():
             logging.error(f"详细错误: {traceback.format_exc()}")
             with open(result_file, 'w') as f:
                 f.write("错误")
+        
+        # 确保结果文件已经被正确写入，并有足够时间被rdp_trigger.py读取
+        if os.path.exists(result_file):
+            try:
+                with open(result_file, 'r') as f:
+                    result_content = f.read().strip()
+                logging.info(f"验证结果已写入文件: {result_content}")
+                # 稍微延迟退出，确保文件完全写入并能被rdp_trigger.py读取
+                time.sleep(0.5)
+            except Exception as e:
+                logging.error(f"读取结果文件失败: {e}")
         
         sys.exit(0)
     

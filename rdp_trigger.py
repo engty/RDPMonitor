@@ -330,23 +330,28 @@ def show_pin_dialog():
         # 保存验证结果到文件
         pin_result_file = os.path.join(log_dir, 'pin_verification_result.txt')
         
-        # 先删除可能存在的旧结果文件，确保获取最新结果
+        # 移除对旧验证结果的复用，确保每次都重新验证
         if os.path.exists(pin_result_file):
             try:
-                # 检查文件修改时间，如果是最近30秒内的验证，直接使用结果
-                file_age = time.time() - os.path.getmtime(pin_result_file)
-                if file_age < 30:  # 30秒内的验证结果视为有效
-                    with open(pin_result_file, 'r') as f:
-                        result = f.read().strip()
-                    logging.info(f"使用已有的PIN验证结果 (文件{file_age:.1f}秒前): {result}")
-                    return result
-                else:
-                    # 如果验证结果超过30秒，删除旧文件，重新验证
-                    os.remove(pin_result_file)
-                    logging.info(f"验证结果已过期({file_age:.1f}秒前)，重新验证")
+                # 删除旧的验证结果文件，确保获取最新结果
+                os.remove(pin_result_file)
+                logging.info("删除旧的验证结果文件，将进行新的验证")
             except Exception as e:
-                logging.error(f"检查验证结果文件失败: {e}")
+                logging.error(f"删除旧验证结果文件失败: {e}")
                 # 继续进行验证
+        
+        # 关键修复：确保验证历史记录文件为空，强制每次都进行新的验证
+        try:
+            verification_history_file = os.path.join(script_dir, "data", "verification_history.json")
+            if os.path.exists(verification_history_file):
+                with open(verification_history_file, 'w', encoding='utf-8') as f:
+                    json.dump({}, f)
+                logging.info("已清空验证历史记录，确保进行新的验证")
+        except Exception as e:
+            logging.error(f"清空验证历史记录失败: {e}")
+        
+        # 同样清空RDP事件记录文件
+        clear_rdp_events_file()
         
         # 使用Python脚本显示PIN码验证对话框并等待结果
         # 修改为使用rdp_monitor.py的验证功能
@@ -601,6 +606,27 @@ def send_notification_with_verification(connection_info):
         import traceback
         logging.error(f"详细错误: {traceback.format_exc()}")
         return False
+
+# 新增清理rdp_events.json的函数
+def clear_rdp_events_file():
+    """清空RDP事件记录文件，确保不会保留旧的验证状态"""
+    try:
+        # 使用绝对路径
+        data_dir = os.path.join(script_dir, 'data')
+        events_file = os.path.join(data_dir, "rdp_events.json")
+        
+        if os.path.exists(events_file):
+            # 保留一个空的事件数组
+            with open(events_file, 'w', encoding='utf-8') as f:
+                json.dump([], f, ensure_ascii=False, indent=2)
+            logging.info("已清空RDP事件记录文件，确保下次连接重新验证")
+            return True
+    except Exception as e:
+        logging.error(f"清空RDP事件记录文件失败: {e}")
+        import traceback
+        logging.error(f"详细错误: {traceback.format_exc()}")
+        return False
+    return True
 
 if __name__ == "__main__":
     main() 

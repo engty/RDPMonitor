@@ -615,12 +615,21 @@ class RDPMonitor:
                 if client_ip in verification_history:
                     record = verification_history[client_ip]
                     record_time = datetime.fromisoformat(record['time'])
-                    cooldown = config.get("verification_cooldown", 60)  # 默认60秒
+                    
+                    # 为失败验证使用短冷却时间，成功验证使用正常冷却时间
+                    if record.get('result') == 'failed' or record.get('use_short_cooldown', False):
+                        # 失败验证的短冷却时间,默认5秒,避免频繁验证窗口弹出
+                        cooldown = config.get("failed_verification_cooldown", 5)
+                    else:
+                        # 成功验证的正常冷却时间
+                        cooldown = config.get("verification_cooldown", 60)  # 默认60秒
                     
                     # 如果在冷却期内，检查之前的验证结果
                     if (current_time - record_time).total_seconds() <= cooldown:
-                        logging.info(f"IP {client_ip} 在验证冷却期内，使用之前的验证结果: {record['result']}")
+                        logging.info(f"IP {client_ip} 在验证冷却期内(冷却时间:{cooldown}秒)，验证结果: {record['result']}")
                         
+                        # 修复漏洞：只有之前验证成功的才能复用验证结果
+                        # 验证失败的必须重新验证
                         if record['result'] == 'success':
                             # 之前验证成功，直接放行
                             notification_data["verification_result"] = "成功(复用)"
@@ -633,25 +642,12 @@ class RDPMonitor:
                             # 标记事件已处理
                             self.processed_events.add(record_id)
                             return
-                        elif record['result'] == 'failed':
-                            # 之前验证失败，断开连接
-                            notification_data["verification_result"] = "失败(复用)"
-                            notification_data["event_type"] = "登录验证失败(复用)"
-                            notification_data["message"] = "使用之前的验证结果，断开连接"
-                            notification_data["force_notification"] = True
-                            
-                            # 记录事件到文件
-                            self.save_event_to_file(notification_data)
-                            
-                            # 发送通知
-                            self.send_notification(notification_data)
-                            
-                            # 断开连接
-                            disconnect_rdp_sessions()
-                            
-                            # 标记事件已处理
-                            self.processed_events.add(record_id)
-                            return
+                        else:
+                            # 验证失败记录即使在冷却期内也不复用，仍然需要重新验证
+                            # 但记录短时间内的验证失败，可以用于防止暴力破解
+                            logging.info(f"IP {client_ip} 之前验证失败，忽略冷却期，必须重新验证")
+                            # 清除之前的验证记录以强制重新验证
+                            del verification_history[client_ip]
                 
                 # 默认验证结果为None，表示未验证
                 verification_result = None
@@ -699,10 +695,12 @@ class RDPMonitor:
                         logging.warning(f"PIN码验证失败或超时，断开连接操作已在PinDialog中执行")
                         verification_result = "失败"
                         
-                        # 更新验证历史记录
+                        # 更新验证历史记录 - 使用专门的失败验证冷却时间（比正常的验证冷却时间短）
                         verification_history[client_ip] = {
                             'result': 'failed',
-                            'time': current_time.isoformat()
+                            'time': current_time.isoformat(),
+                            # 添加冷却时间标志，指示这是失败验证，需使用短冷却时间
+                            'use_short_cooldown': True
                         }
                         
                         # 断开连接操作
@@ -1449,6 +1447,19 @@ def disconnect_rdp_sessions():
             except Exception as e:
                 logging.error(f"重启终端服务失败: {e}")
         
+        # 关键修复：在断开连接后，清空验证历史记录文件，确保下次连接必须重新验证
+        try:
+            verification_history_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "verification_history.json")
+            if os.path.exists(verification_history_file):
+                with open(verification_history_file, 'w', encoding='utf-8') as f:
+                    json.dump({}, f)
+                logging.info("断开连接：已清空验证历史记录，确保下次连接重新验证")
+        except Exception as e:
+            logging.error(f"断开连接时清理验证历史记录失败: {e}")
+        
+        # 同时清空RDP事件记录文件
+        clear_rdp_events_file()
+        
         return success
     except Exception as e:
         logging.error(f"断开RDP连接失败: {e}")
@@ -1859,11 +1870,19 @@ class PinDialog:
                     os.fsync(f.fileno())
                 logging.info("已写入PIN验证结果：验证失败")
                 
-                # 在退出前先确保结果已写入
-                if os.path.exists(result_file):
-                    with open(result_file, 'r') as f:
-                        content = f.read().strip()
-                    logging.info(f"确认PIN验证失败结果文件已写入: {content}")
+                # 关键修复：清空验证历史记录，确保下次一定重新验证
+                verification_history_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "verification_history.json")
+                if os.path.exists(verification_history_file):
+                    try:
+                        # 清空验证历史内容
+                        with open(verification_history_file, 'w', encoding='utf-8') as f:
+                            json.dump({}, f)
+                        logging.info("验证失败：已清空验证历史记录，确保下次连接重新验证")
+                    except Exception as e:
+                        logging.error(f"清理验证历史记录失败: {e}")
+                
+                # 清空RDP事件记录文件
+                clear_rdp_events_file()
             except Exception as e:
                 logging.error(f"写入验证结果失败: {e}")
                 import traceback
@@ -1890,6 +1909,20 @@ class PinDialog:
             
             # 确保文件写入完成
             os.fsync(f.fileno())
+            
+            # 关键修复：强制删除验证历史记录文件，确保下次连接一定会重新验证
+            verification_history_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "verification_history.json")
+            if os.path.exists(verification_history_file):
+                try:
+                    # 清空验证历史内容但保留文件
+                    with open(verification_history_file, 'w', encoding='utf-8') as f:
+                        json.dump({}, f)
+                    logging.info("已清空验证历史记录，确保下次连接重新验证")
+                except Exception as e:
+                    logging.error(f"清理验证历史记录失败: {e}")
+            
+            # 同时清空RDP事件记录文件
+            clear_rdp_events_file()
         except Exception as e:
             logging.error(f"写入验证结果失败: {e}")
             import traceback
@@ -2035,7 +2068,9 @@ class PinDialog:
                 verification_history[client_ip] = {
                     'result': 'failed',
                     'time': datetime.now().isoformat(),
-                    'reason': disconnect_reason
+                    'reason': disconnect_reason,
+                    # 添加冷却时间标志，指示这是失败验证，需使用短冷却时间
+                    'use_short_cooldown': True
                 }
                 
                 # 保存验证历史记录
@@ -2280,7 +2315,20 @@ class PinDialog:
                 self._force_disconnect_multiple()
             except Exception as e:
                 logging.error(f"强制断开失败: {e}")
+            
+            # 关键修复：确保多次清理验证历史文件，不留死角
+            try:
+                verification_history_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "verification_history.json")
+                if os.path.exists(verification_history_file):
+                    # 清空验证历史
+                    with open(verification_history_file, 'w', encoding='utf-8') as f:
+                        json.dump({}, f)
+                    logging.info("执行断开连接操作：已清空验证历史记录，确保下次连接重新验证")
+            except Exception as e:
+                logging.error(f"清理验证历史记录失败: {e}")
                 
+            # 同时清空RDP事件记录文件
+            clear_rdp_events_file()
         except Exception as e:
             logging.error(f"执行断开连接操作时发生错误: {e}")
             import traceback
@@ -3945,6 +3993,27 @@ def add_ip_to_whitelist(ip):
     except Exception as e:
         logging.error(f"添加IP到白名单失败: {e}")
         return False
+
+def clear_rdp_events_file():
+    """清空RDP事件记录文件，确保不会保留旧的验证状态"""
+    try:
+        # 使用绝对路径
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        data_dir = os.path.join(current_dir, 'data')
+        events_file = os.path.join(data_dir, "rdp_events.json")
+        
+        if os.path.exists(events_file):
+            # 保留一个空的事件数组
+            with open(events_file, 'w', encoding='utf-8') as f:
+                json.dump([], f, ensure_ascii=False, indent=2)
+            logging.info("已清空RDP事件记录文件，确保下次连接重新验证")
+            return True
+    except Exception as e:
+        logging.error(f"清空RDP事件记录文件失败: {e}")
+        import traceback
+        logging.error(f"详细错误: {traceback.format_exc()}")
+        return False
+    return True
 
 if __name__ == "__main__":
     main() 

@@ -9,6 +9,7 @@
   "blacklist_cooldown": 24,
   "verification_timeout": 60,
   "verification_cooldown": 60,
+  "failed_verification_cooldown": 5,
   "ip_blacklistfile": "data/ip_blacklist.txt",
   "ip_whitelistfile": "data/ip_whitelist.txt"
 }

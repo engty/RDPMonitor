@@ -524,6 +524,101 @@ def is_ip_in_whitelist(ip, config):
     
     return False
 
+def get_ip_location(ip):
+    """查询IP地址的地理位置信息(中文)"""
+    if is_private_ip(ip):
+        logging.info(f"IP {ip} 是内网IP，跳过地理位置查询")
+        return None
+        
+    try:
+        # 记录开始查询
+        logging.info(f"开始查询IP {ip} 的地理位置信息")
+        
+        # 使用ipinfo.io API (无需API密钥的基础查询)
+        url = f"https://ipinfo.io/{ip}/json"
+        logging.info(f"尝试使用ipinfo.io API: {url}")
+        
+        # 设置超时时间，避免长时间等待导致阻塞
+        response = requests.get(url, timeout=5)
+        
+        # 检查请求是否成功
+        if response.status_code == 200:
+            data = response.json()
+            logging.info(f"ipinfo.io API响应数据: {data}")
+            
+            # 从结果中提取城市和国家信息
+            city = data.get("city", "")
+            country_code = data.get("country", "")
+            region = data.get("region", "")
+            
+            # 国家代码转中文名称的映射
+            country_map = {
+                "CN": "中国", "US": "美国", "JP": "日本", "KR": "韩国", "DE": "德国",
+                "FR": "法国", "GB": "英国", "RU": "俄罗斯", "CA": "加拿大", "AU": "澳大利亚",
+                "IN": "印度", "BR": "巴西", "SG": "新加坡", "MY": "马来西亚", "TH": "泰国",
+                "VN": "越南", "ID": "印度尼西亚", "PH": "菲律宾", "NZ": "新西兰", "HK": "香港",
+                "TW": "台湾", "MO": "澳门"
+            }
+            
+            # 转换国家代码为中文名称
+            country = country_map.get(country_code, country_code)
+            
+            # 组合位置信息
+            location_parts = []
+            if country:
+                location_parts.append(country)
+            if region:
+                location_parts.append(region)
+            if city:
+                location_parts.append(city)
+                
+            if location_parts:
+                location = " ".join(location_parts)
+                logging.info(f"成功获取到IP地理位置: {location}")
+                return location
+            else:
+                logging.warning("ipinfo.io API响应中未找到地理位置信息")
+        else:
+            logging.warning(f"ipinfo.io API请求失败: HTTP {response.status_code}")
+        
+        # 备用方案：使用ip-api.com的接口
+        try:
+            backup_url = f"http://ip-api.com/json/{ip}?lang=zh-CN"
+            logging.info(f"尝试使用备用API: {backup_url}")
+            response = requests.get(backup_url, timeout=3)
+            
+            if response.status_code == 200:
+                data = response.json()
+                logging.info(f"备用API响应数据: {data}")
+                
+                if data.get("status") == "success":
+                    location_parts = []
+                    country = data.get("country", "")
+                    regionName = data.get("regionName", "")
+                    city = data.get("city", "")
+                    
+                    if country:
+                        location_parts.append(country)
+                    if regionName:
+                        location_parts.append(regionName)
+                    if city:
+                        location_parts.append(city)
+                        
+                    if location_parts:
+                        location = " ".join(location_parts)
+                        logging.info(f"备用API成功获取IP地理位置: {location}")
+                        return location
+        except Exception as e:
+            logging.error(f"备用API请求失败: {e}")
+        
+        logging.warning(f"所有API尝试均失败，无法获取IP {ip} 的地理位置")
+        return None
+    except Exception as e:
+        logging.error(f"获取IP地理位置失败: {e}")
+        import traceback
+        logging.error(f"详细错误: {traceback.format_exc()}")
+        return None
+
 def send_notification_with_verification(connection_info):
     """发送包含验证结果的RDP登录通知"""
     try:
@@ -549,8 +644,33 @@ def send_notification_with_verification(connection_info):
         try:
             if is_private_ip(client_ip):
                 ip_type = "内网IP"
-        except:
+                logging.info(f"IP {client_ip} 被识别为内网IP")
+            else:
+                logging.info(f"IP {client_ip} 被识别为外网IP")
+        except Exception as e:
+            logging.error(f"判断IP类型时出错: {e}")
             pass
+            
+        # 获取IP地理位置信息
+        ip_location = None
+        source_info = ""
+        
+        if ip_type == "外网IP":
+            # 查询IP地理位置信息
+            logging.info(f"开始查询外网IP {client_ip} 的地理位置")
+            ip_location = get_ip_location(client_ip)
+            
+            if ip_location:
+                logging.info(f"成功获取到IP {client_ip} 的地理位置: {ip_location}")
+                source_info = f"{client_ip} ({ip_location})"
+            else:
+                logging.warning(f"未能获取到IP {client_ip} 的地理位置，使用默认标记")
+                source_info = f"{client_ip} ({ip_type})"
+        else:
+            logging.info(f"内网IP {client_ip} 不查询地理位置")
+            source_info = f"{client_ip} (内网)"
+        
+        logging.info(f"最终标记的来源信息: {source_info}")
             
         # 检查是否为白名单免验证情况
         is_whitelist_bypass = "白名单免验证" in verification_result or verification_result == "白名单免验证"
@@ -586,13 +706,16 @@ def send_notification_with_verification(connection_info):
             if verification_time != "未知":
                 verification_time = f"{verification_time}秒"
 
-            # 构建简化的Markdown格式消息内容
+            # 构建简化的Markdown格式消息内容，每个主要项目之间添加空行
             formatted_message = f"""
 ## RDP验证结果
 
 **时间**：{event_time}
+
 **用户**：**{username}**
-**来源**：{client_ip} ({ip_type})
+
+**来源**：{source_info}
+
 **主机**：{hostname}
 
 **验证详情**：
